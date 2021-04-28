@@ -994,11 +994,11 @@ migrationTest5 connSource =
       , mgrFrom = 2
       , mgrAction = ModifyColumnMigration cursorSql copyColumnSql 5
       }
-    copyColumnSql :: MonadDB m => [UUID] -> m ()
+    copyColumnSql :: MonadDB m => [Identity UUID] -> m ()
     copyColumnSql primaryKeys =
       runQuery_ . sqlUpdate "bank" $ do
         sqlSetCmd "name_new" "bank.name"
-        sqlWhereIn "bank.id" primaryKeys
+        sqlWhereIn "bank.id" $ runIdentity <$> primaryKeys
 
     addBoolColumnMigration = Migration
       { mgrTableName = "bank"
@@ -1012,11 +1012,11 @@ migrationTest5 connSource =
       , mgrFrom = 4
       , mgrAction = ModifyColumnMigration cursorSql modifyColumnSql 100
       }
-    modifyColumnSql :: MonadDB m => [UUID] -> m ()
+    modifyColumnSql :: MonadDB m => [Identity UUID] -> m ()
     modifyColumnSql primaryKeys =
       runQuery_ . sqlUpdate "bank" $ do
         sqlSet "name_is_true" True
-        sqlWhereIn "bank.id" primaryKeys
+        sqlWhereIn "bank.id" $ runIdentity <$> primaryKeys
 
     checkAddStringColumn = do
       runQuery_ . sqlSelect "bank" $ sqlResult "name_new"
