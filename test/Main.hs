@@ -3,14 +3,14 @@ module Main
 
 import Control.Exception.Lifted as E
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Control
 
 import Data.Either
+import Data.Maybe
 import Data.Monoid
-import Prelude
-import qualified Data.Text as T
 import Data.Typeable
 import Data.UUID.Types
+import Prelude
+import qualified Data.Text as T
 
 import Database.PostgreSQL.PQTypes
 import Database.PostgreSQL.PQTypes.Checks
@@ -908,19 +908,80 @@ migrationTest4 connSource =
 
   freshTestDB         step
 
-eitherExc :: MonadBaseControl IO m =>
-             (SomeException -> m ()) -> (a -> m ()) -> m a -> m ()
-eitherExc left right c = (E.try c) >>= either left right
+data TestConditionFail = TestConditionFail
+  deriving (Show, Typeable, Eq)
+instance Exception TestConditionFail where
+  fromException = fromMaybeDBException castSomeException
+
+dbExtraExceptionCatchTest :: ConnectionSourceM (LogT IO) -> TestTree
+dbExtraExceptionCatchTest connSource =
+  testCaseSteps' "WithDbExtra catch test" connSource $ \step -> do
+  freshTestDB         step
+  createTablesSchema1 step
+
+  let dbExceptional = throwDB TestConditionFail
+  let ioExceptional = throwIO TestConditionFail
+
+  step "Trying DBException handler"
+  assertNoException "DBException handler"
+    . catch dbExceptional $ \dbe@(DBException _ exc) -> do
+        let mExc = fromException $ toException exc
+        liftIO $ assertEqual ("DBException: " ++ show dbe)
+          (Just TestConditionFail) mExc
+
+  step "Trying TestConditionFail handler with `throwDB`"
+  assertNoException "TestConditionFail handler"
+    $ catches dbExceptional
+      [ Handler $ \DBBaseLineConditionIsFalse {} -> liftIO $ assertFailure "Should not catch DBBaseLineConditionIsFalse"
+      , Handler $ \TestConditionFail -> pure ()
+      ]
+
+  step "Trying TestConditionFail handler with `throwIO`"
+  assertNoException "TestConditionFail handler"
+    $ catches ioExceptional
+      [ Handler $ \DBBaseLineConditionIsFalse {} -> liftIO $ assertFailure "Should not catch DBBaseLineConditionIsFalse"
+      , Handler $ \TestConditionFail -> pure ()
+      ]
+
+  step "Trying WithDBExtra handler with `throwDB`"
+  assertNoException "WithDBExtra handler"
+    $ catches dbExceptional
+      [ Handler $ \(_ :: WithDBExtra DBBaseLineConditionIsFalse)
+          -> liftIO $ assertFailure "Should not catch DBBaseLineConditionIsFalse"
+      , Handler $ \(_ :: WithDBExtra TestConditionFail) -> pure ()
+      ]
+
+  step "Trying WithDBExtra handler with `throwIO`"
+  assertException "WithDBExtra handler"
+    $ catch ioExceptional $ \(_ :: WithDBExtra TestConditionFail)
+          -> liftIO $ assertFailure "Should not catch TestConditionFail"
+
+  step "Trying MaybeDBExtra handler with `throwDB`"
+  assertNoException "WithDBExtra handler"
+    . catch dbExceptional $ \(MaybeDBExtra (_ :: TestConditionFail) mSql)
+      -> liftIO . assertBool "SQL context must be Just value" $ isJust mSql
+
+  step "Trying MaybeDBExtra handler with `throwIO`"
+  assertNoException "WithDBExtra handler"
+    . catch ioExceptional $ \(MaybeDBExtra (_ :: TestConditionFail) mSql)
+      -> liftIO . assertBool "SQL context must be Just value" $ isNothing mSql
 
 assertNoException :: String -> TestM () -> TestM ()
-assertNoException t c = eitherExc
-  (const $ liftIO $ assertFailure ("Exception thrown for: " ++ t))
-  (const $ return ()) c
+assertNoException t action = catches action
+  [ Handler $ \(e :: HUnitFailure) -> throwIO e -- always rethrow assertion failure
+  , Handler $ \(SomeException e) -> liftIO . assertFailure $
+      "Exception thrown for: " ++ t ++ "\nException: " ++ show e
+  ]
 
 assertException :: String -> TestM () -> TestM ()
-assertException   t c = eitherExc
-  (const $ return ())
-  (const $ liftIO $ assertFailure ("No exception thrown for: " ++ t)) c
+assertException t action = do
+  catches (action >> failed)
+    [ Handler $ \(e :: HUnitFailure) -> throwIO e -- always rethrow assertion failure
+    , Handler $ \(SomeException _) -> pure ()
+    ]
+  where
+    failed = liftIO $ assertFailure ("No exception thrown for: " ++ t)
+
 
 -- | A variant of testCaseSteps that works in TestM monad.
 testCaseSteps' :: TestName -> ConnectionSourceM (LogT IO)
@@ -946,6 +1007,7 @@ main = do
                          , migrationTest2 connSource
                          , migrationTest3 connSource
                          , migrationTest4 connSource
+                         , dbExtraExceptionCatchTest connSource
                          ]
   where
     ings =

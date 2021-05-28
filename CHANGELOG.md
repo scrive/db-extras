@@ -1,3 +1,15 @@
+# hpqtypes-extras-1.12.0.0 (2021-15-01)
+* Lower constraints from `DBExtraException` to `Exception`.
+* Remove `DBExtraException` class entirely.
+* Remove `ToJSValue` constraints everywhere (including instances).
+* Remove dependency on `text-fields`.
+* Improved documentation of `sql*OrThrowWhyNot` combinators.
+* Add `WithDBExtra` and `WithMaybeDBExtra` wrapper types for easier
+  exception handling.
+* Add `fromMaybeDBException` and `castSomeException` helper functions
+  for `throwDB` aware exception instances.
+
+
 # hpqtypes-extras-1.11.0.0 (2021-03-29)
 * Support running with higher table versions in the database than in the code
 
